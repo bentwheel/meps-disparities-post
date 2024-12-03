@@ -1,0 +1,224 @@
+---
+title: "Code to compile and visualize basic prevalence rates of chronic illiness across
+  various socio-demographic subpopulations."
+author: "C. Seth Lester, ASA, MAAA"
+date: "2024-12-01"
+output: github_document
+always_allow_html: true
+---
+
+# Using MEPS to understand The *very* basic notion of why a focus on health disparities is important in population health
+
+The images below are created in R and use Public Use Files (PUFs) containing data surveyed by the Medical Expenditure Panel Survey (MEPS) from 2019 - 2022. The data is compiled using the ```tidyverse``` R packages and the ```MEPS``` package.
+
+```{r setup}
+
+library(tidyverse)
+library(MEPS)
+library(labelled)
+library(survey)
+library(srvyr)
+
+meps_years <- list(meps_year = c("2018", "2019", "2020", "2021", "2022"))
+num_years <- length(meps_years$meps_year)
+
+fyc_datasets <- NULL
+  
+# Function to rename columns
+rename_fields <- function(names) {
+  # Iterate over each name and apply the renaming logic
+  names <- sapply(names, function(name) {
+    # Check if the name matches the pattern
+    if (str_detect(name, "^(PRI|MCR|MCD)[A-Z]{2}\\d{2}$")) {
+      # Replace the last two digits with "YY"
+      name <- str_sub(name, 1, -3) %>% str_c("YY")
+    }
+    else if (str_detect(name, "^INS[A-Z]{2}\\d{2}X$")) {
+      # Replace the last two digits with "YY"
+      name <- str_remove(name, "\\d{2}X") %>% str_c("YY")
+    }
+    return(name)  # Return the modified or original name
+  })
+  return(names)
+}
+  
+for (year in meps_years$meps_year)
+{
+  yr2d <- str_sub(year, 3)
+  select_variables <- c("DUPERSID", "PANEL", "VARPSU", "VARSTR", paste0("PERWT",yr2d,"F"),
+                        paste0("TOTEXP",yr2d), paste0("TOTPRV",yr2d), paste0("TOTMCR",yr2d), 
+                        paste0("TOTMCD",yr2d), paste0("TOTSLF",yr2d), 
+                        paste0("IPTEXP",yr2d), paste0("IPTPRV",yr2d), paste0("IPTMCR",yr2d), 
+                        paste0("IPTMCD",yr2d), paste0("IPTSLF",yr2d), 
+                        paste0("RXEXP",yr2d), paste0("RXPRV",yr2d), paste0("RXMCR",yr2d), 
+                        paste0("RXMCD",yr2d), paste0("RXSLF",yr2d), 
+                        paste0("INSCOV",yr2d), paste0("REGION",yr2d), paste0("POVCAT",yr2d),
+                        "RACETHX", "DOBYY", "DOBMM", "SEX", paste0("AGE",yr2d,"X"),
+                        "HIDEG",
+                        "CHDDX", "ANGIDX", "MIDX", "OHRTDX", ifelse(year >= 2018, "DIABDX_M18", "DIABDX"), "HIBPDX", "ASTHDX")
+  
+  fyc_data <- MEPS::read_MEPS(type = "FYC", year=year) %>% 
+    select(all_of(select_variables), matches("^(PRI|MCR|MCD)(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\d{2}$"),
+           matches("^INS(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\d{2}X$")) %>% 
+    rename_with(~paste0("PERWTYYF", recycle0=T), starts_with("PERWT")) %>% 
+    rename_with(~paste0("INSCOVYY", recycle0=T), starts_with("INSCOV")) %>% 
+    rename_with(~paste0("REGIONYY", recycle0=T), starts_with("REGION")) %>% 
+    rename_with(~paste0("POVCATYY", recycle0=T), starts_with("POVCAT")) %>% 
+    rename_with(~paste0("TOTEXPYY", recycle0=T), starts_with("TOTEXP")) %>% 
+    rename_with(~paste0("TOTPRVYY", recycle0=T), starts_with("TOTPRV")) %>% 
+    rename_with(~paste0("TOTMCRYY", recycle0=T), starts_with("TOTMCR")) %>% 
+    rename_with(~paste0("TOTMCDYY", recycle0=T), starts_with("TOTMCD")) %>% 
+    rename_with(~paste0("TOTSLFYY", recycle0=T), starts_with("TOTSLF")) %>% 
+    rename_with(~paste0("IPTEXPYY", recycle0=T), starts_with("IPTEXP")) %>% 
+    rename_with(~paste0("IPTPRVYY", recycle0=T), starts_with("IPTPRV")) %>% 
+    rename_with(~paste0("IPTMCRYY", recycle0=T), starts_with("IPTMCR")) %>% 
+    rename_with(~paste0("IPTMCDYY", recycle0=T), starts_with("IPTMCD")) %>% 
+    rename_with(~paste0("IPTSLFYY", recycle0=T), starts_with("IPTSLF")) %>% 
+    rename_with(~paste0("RXEXPYY", recycle0=T), starts_with("RXEXP")) %>% 
+    rename_with(~paste0("RXPRVYY", recycle0=T), starts_with("RXPRV")) %>% 
+    rename_with(~paste0("RXMCRYY", recycle0=T), starts_with("RXMCR")) %>% 
+    rename_with(~paste0("RXMCDYY", recycle0=T), starts_with("RXMCD")) %>% 
+    rename_with(~paste0("RXSLFYY", recycle0=T), starts_with("RXSLF")) %>% 
+    rename_with(~paste0("AGEYY", recycle0=T), starts_with("AGE")) %>% 
+    rename_with(.fn = rename_fields) %>% 
+    mutate(meps_year = year) %>% 
+    relocate(meps_year, .after=DUPERSID)
+  
+  if(year >= 2018) {
+    fyc_data <- fyc_data %>% 
+      rename(DIABDX = DIABDX_M18)
+  }
+
+  fyc_datasets <- fyc_datasets %>% 
+    union_all(fyc_data)
+}
+
+# Retrieve Pooled Weights file
+# Bring in pooled weights here!
+pooled_linkage_file  <- read_MEPS(type = "PL") %>% 
+  select(DUPERSID, PANEL, STRA9622, PSU9622) 
+
+fyc_data_pooled <- fyc_datasets %>% 
+  left_join(pooled_linkage_file) %>% 
+  mutate(POOLWTYYF = PERWTYYF / num_years) %>% 
+  mutate(RACETHX_DSC = labelled::to_factor(RACETHX),
+         INSCOV_DSC = labelled::to_factor(INSCOVYY),
+         REGION_DSC = labelled::to_factor(REGIONYY),
+         SEX_DSC = labelled::to_factor(SEX),
+         HIBPDX_DSC = labelled::to_factor(HIBPDX),
+         DIABDX_DSC = labelled::to_factor(DIABDX),
+         ASTHDX_DSC = labelled::to_factor(ASTHDX),
+         HIDEG_DSC = labelled::to_factor(HIDEG),
+         AGE_GRP_2 = if_else(AGEYY <= 64, "UNDER 65", "65 AND OLDER"))
+
+srvy_design_obj <- fyc_data_pooled %>%
+  srvyr::as_survey_design(
+        id = PSU9622,
+        strata = STRA9622,
+        weights = POOLWTYYF,
+        nest = T
+  )
+
+cp <- rev(c('#d7191c','#fdae61','#ffffbf','#abd9e9','#2c7bb6'))
+
+         
+```
+
+## Chronic illness disparities by gender and race/ethnicity
+
+```{r diab_by_race, echo=FALSE}
+
+diab_by_race.data <- srvy_design_obj %>% 
+  srvyr::group_by(SEX_DSC, RACETHX_DSC, DIABDX_DSC) %>% 
+  srvyr::summarize(estimate = survey_prop(vartype = c("se", "ci"))) %>% 
+  as_tibble() %>% 
+  dplyr::filter(DIABDX_DSC == "1 YES") %>% 
+  dplyr::mutate(rse = estimate_se / estimate) 
+
+diab_by_race.plot <- diab_by_race.data %>% 
+  ggplot(aes(x = SEX_DSC, y = estimate, fill = RACETHX_DSC)) + 
+  geom_bar(stat="identity", position=position_dodge2(width=.9), color="gray20", size=.3) + 
+  scale_color_manual(values = c(error = "black"), labels = c("error" = "Error bars denote 95% CI")) +
+  geom_errorbar(aes(color = "error", ymin = estimate_low, ymax = estimate_upp), position = position_dodge(.9), width = .2) +
+  scale_y_continuous(labels = scales::label_percent(accuracy=.1)) +
+  scale_fill_manual(values= cp) +
+  theme_light() + 
+  labs(title = "Diabetes Prevalence by Race/Ethnicity and Gender",
+    x = "Gender",
+    y = "Estimated Prevalence",
+    fill = "Race & Ethnicity",
+    caption = "Medical Expenditure Panel Survey (MEPS)\n2018 - 2022 Pooled FYC PUFs\nhttps://meps.ahrq.gov/") +
+  theme(legend.position = "bottom") + 
+  guides(color = guide_legend(title = NULL),
+         fill = guide_legend(nrow=5))  # Remove title from color legend
+
+diab_by_race.plot
+
+
+```
+
+
+```{r htn_by_race_age, echo=FALSE}
+
+htn_by_race.data <- srvy_design_obj %>% 
+  srvyr::filter(POOLWTYYF > 0) %>% 
+  srvyr::group_by(AGE_GRP_2, RACETHX_DSC, HIBPDX_DSC) %>% 
+  srvyr::summarize(estimate = survey_prop(vartype = c("se", "ci"))) %>% 
+  as_tibble() %>% 
+  dplyr::filter(HIBPDX_DSC == "1 YES") %>% 
+  dplyr::mutate(rse = estimate_se / estimate) 
+
+htn_by_race.plot <- htn_by_race.data %>% 
+  ggplot(aes(x = AGE_GRP_2, y = estimate, fill = RACETHX_DSC)) + 
+  geom_bar(stat="identity", position=position_dodge2(width=.9), color="gray20", size=.3) + 
+  scale_color_manual(values = c(error = "black"), labels = c("error" = "Error bars denote 95% CI")) +
+  geom_errorbar(aes(color = "error", ymin = estimate_low, ymax = estimate_upp), position = position_dodge(.9), width = .2) +
+  scale_y_continuous(labels = scales::label_percent(accuracy=.1)) +
+  scale_fill_manual(values= cp) +
+  theme_light() + 
+  labs(title = "Hypertension Prevalence by Race/Ethnicity and Age Group",
+    x = "Age Group",
+    y = "Estimated Prevalence",
+    fill = "Race & Ethnicity",
+    caption = "Medical Expenditure Panel Survey (MEPS)\n2018 - 2022 Pooled FYC PUFs\nhttps://meps.ahrq.gov/") +
+  theme(legend.position = "bottom") + 
+  guides(color = guide_legend(title = NULL),
+         fill = guide_legend(nrow=5))  # Remove title from color legend
+
+htn_by_race.plot
+
+```
+
+## Expenditure disparities by race/ethnicity
+
+```{r ipt_exp_by_race, echo=FALSE}
+
+ipt_exp_by_race.data <- srvy_design_obj %>% 
+  srvyr::filter(POOLWTYYF > 0) %>% 
+  srvyr::group_by(HIDEG_DSC, AGE_GRP_2) %>% 
+  srvyr::summarize(estimate = survey_ratio(IPTEXPYY, TOTEXPYY, vartype = c("se", "ci"))) %>% 
+  as_tibble() %>% 
+  dplyr::mutate(rse = estimate_se / estimate) 
+
+diab_by_race.plot <- diab_by_race.data %>% 
+  ggplot(aes(x = SEX_DSC, y = estimate, fill = RACETHX_DSC)) + 
+  geom_bar(stat="identity", position=position_dodge2(width=.9), color="gray20", size=.3) + 
+  scale_color_manual(values = c(error = "black"), labels = c("error" = "Error bars denote 95% CI")) +
+  geom_errorbar(aes(color = "error", ymin = estimate_low, ymax = estimate_upp), position = position_dodge(.9), width = .2) +
+  scale_y_continuous(labels = scales::label_percent(accuracy=.1)) +
+  scale_fill_manual(values= cp) +
+  theme_light() + 
+  labs(title = "Diabetes Prevalence by Race/Ethnicity and Gender",
+    x = "Gender",
+    y = "Estimated Prevalence",
+    fill = "Race & Ethnicity",
+    caption = "Medical Expenditure Panel Survey (MEPS)\n2018 - 2022 Pooled FYC PUFs\nhttps://meps.ahrq.gov/") +
+  theme(legend.position = "bottom") + 
+  guides(color = guide_legend(title = NULL),
+         fill = guide_legend(nrow=5))  # Remove title from color legend
+
+diab_by_race.plot
+
+
+```
+
